@@ -1,0 +1,17 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Persisted trip records (personal data: emails, itineraries)
+data/
+
+# Logs
+*.log
+
+# Personal resume (contains PII, not part of this project's code)
+cv.md
