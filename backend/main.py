@@ -22,6 +22,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+import uuid
+
 from backend.config import settings
 from backend.graph import build_graph
 from backend.llm import get_llm
@@ -79,10 +81,12 @@ class AskResponse(BaseModel):
 
 @app.post("/plan", response_model=PlanResponse)
 def plan_trip(req: PlanRequest) -> PlanResponse:
+    trip_id = uuid.uuid4().hex[:8]
     memory = SessionMemory()
     token_tracker = TokenTracker()
 
     initial_state: TripState = {
+        "trip_id": trip_id,
         "origin": req.origin,
         "destination": req.destination,
         "start_date": req.start_date,
@@ -103,7 +107,8 @@ def plan_trip(req: PlanRequest) -> PlanResponse:
 
     final_state = graph_app.invoke(initial_state)
 
-    trip_id = save_trip({
+    save_trip({
+        "trip_id": trip_id,
         "origin": final_state["origin"],
         "destination": final_state["destination"],
         "start_date": final_state["start_date"],
@@ -148,8 +153,14 @@ def ask_question(req: AskRequest) -> AskResponse:
         context_chunks = [doc.page_content for doc, _ in session["memory"].recall(req.question, k=3)]
         token_tracker = session["token_tracker"]
     else:
-        # Server restarted since /plan - fall back to trips.json.
-        context_chunks = [r["content"][:300] for r in trip.get("search_results", [])[:3]]
+        # Server restarted — load persistent FAISS from disk, extract only
+        # this trip's vectors by trip_id (no re-embedding), semantic search.
+        memory = SessionMemory()
+        recalled = memory.recall_by_trip(req.question, req.trip_id, k=3)
+        if recalled:
+            context_chunks = [doc.page_content for doc, _ in recalled]
+        else:
+            context_chunks = [r["content"][:300] for r in trip.get("search_results", [])[:3]]
         token_tracker = TokenTracker()
 
     context = "\n\n".join(f"- {chunk}" for chunk in context_chunks)

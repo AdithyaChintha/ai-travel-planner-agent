@@ -7,16 +7,18 @@ Relationship to state["search_results"]:
 - That JSON list IS state["search_results"] - the Itinerary agent reads it
   directly to write the plan. Nothing about that changes.
 - SessionMemory is a SEPARATE index built FROM the same JSON: for each
-  result, Research calls remember(content, metadata={"title":, "url":}).
-  It doesn't replace the JSON - it's an additional, searchable-by-meaning
-  copy of it, used for follow-up Q&A:
+  result, Research calls remember(content, metadata={"title":, "url":,
+  "trip_id":}). It doesn't replace the JSON - it's an additional,
+  searchable-by-meaning copy of it, used for follow-up Q&A:
 
-  "what do I already know that might help answer this new question?"
-  -> recall(question, k=3), hand the chunks (+ source metadata) to Gemini
-  as context. Falls back to a fresh Tavily search if nothing relevant.
+  While server is running: recall() searches the in-RAM session index.
+  After restart: recall_by_trip() loads the persistent index from disk,
+  extracts only that trip's vectors (no re-embedding), and searches them.
 """
 
 from __future__ import annotations
+
+import numpy as np
 
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
@@ -31,35 +33,75 @@ class SessionMemory:
             model=settings.embedding_model,
             google_api_key=settings.google_api_key,
         )
-        self._store: FAISS | None = None
+        self._path = settings.faiss_store_path
+        self._store: FAISS | None = self._load()
+
+    def _load(self) -> FAISS | None:
+        if self._path.exists():
+            return FAISS.load_local(
+                str(self._path),
+                self._embeddings,
+                allow_dangerous_deserialization=True,
+            )
+        return None
+
+    def _save(self) -> None:
+        self._path.mkdir(parents=True, exist_ok=True)
+        self._store.save_local(str(self._path))
 
     def remember(self, text: str, metadata: dict | None = None) -> None:
-        """Embed `text` (e.g. one Tavily result's content) and store it,
-        keeping `metadata` (e.g. title/url) attached for later."""
+        """Embed `text` and store it with metadata (title, url, trip_id)."""
         doc = Document(page_content=text, metadata=metadata or {})
         if self._store is None:
             self._store = FAISS.from_documents([doc], self._embeddings)
         else:
             self._store.add_documents([doc])
+        self._save()
 
     def recall(self, query: str, k: int = 3) -> list[tuple[Document, float]]:
-        """
-        Return up to `k` stored (Document, distance) pairs, closest first.
-        Lower distance means more similar. doc.page_content is the text,
-        doc.metadata carries whatever was passed to remember() (e.g.
-        title/url, for citing sources). Returns [] if nothing remembered yet.
-        """
+        """Semantic search over the full in-RAM index. Used during /ask when
+        the session is still alive (server not restarted)."""
         if self._store is None:
             return []
         return self._store.similarity_search_with_score(query, k=k)
+
+    def recall_by_trip(self, query: str, trip_id: str, k: int = 3) -> list[tuple[Document, float]]:
+        """Semantic search scoped to one trip, used after a server restart.
+
+        Instead of re-embedding the chunks from scratch, this reconstructs
+        the existing vectors from the persistent index by internal ID —
+        only 1 Google API call (to embed the query), not ~15.
+        """
+        if self._store is None:
+            return []
+
+        # Pull docs + their existing vectors for this trip only
+        text_embeddings: list[tuple[str, list[float]]] = []
+        trip_docs: list[Document] = []
+
+        for internal_id, doc_uuid in self._store.index_to_docstore_id.items():
+            doc = self._store.docstore._dict.get(doc_uuid)
+            if doc is None or doc.metadata.get("trip_id") != trip_id:
+                continue
+            vector = self._store.index.reconstruct(int(internal_id))
+            text_embeddings.append((doc.page_content, vector.tolist()))
+            trip_docs.append(doc)
+
+        if not text_embeddings:
+            return []
+
+        # Build a small temp index from the extracted vectors — no API calls
+        temp_store = FAISS.from_embeddings(
+            text_embeddings=text_embeddings,
+            embedding=self._embeddings,
+        )
+        return temp_store.similarity_search_with_score(query, k=k)
 
 
 if __name__ == "__main__":
     # Manual test: run `python vector_store.py` (requires GOOGLE_API_KEY in .env)
     memory = SessionMemory()
 
-    # This is what a Tavily response looks like - a list of JSON objects.
-    # This list IS what becomes state["search_results"].
     search_results = [
         {
             "title": "Goa Budget Hotels Guide",
@@ -81,7 +123,6 @@ if __name__ == "__main__":
         },
     ]
 
-    # ...and each item ALSO gets remembered for follow-up retrieval:
     for r in search_results:
         memory.remember(r["content"], metadata={"title": r["title"], "url": r["url"]})
 

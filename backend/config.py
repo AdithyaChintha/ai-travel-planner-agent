@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     # --- FAISS (session memory for RAG) ---
     # Model used to turn text into vectors for similarity search.
     embedding_model: str = "models/gemini-embedding-001"
+    # Directory where the FAISS index is persisted across sessions.
+    faiss_store_path: Path = Path(__file__).parent.parent / "data" / "faiss_index"
 
     # --- Budget-check retry loop ---
     # Max number of times the graph will loop research -> itinerary ->

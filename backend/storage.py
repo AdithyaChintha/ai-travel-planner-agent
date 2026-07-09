@@ -51,9 +51,9 @@ def _write_all(trips: list[dict]) -> None:
 
 
 def save_trip(trip: dict) -> str:
-    """Save a new trip record. Adds trip_id and created_at, returns trip_id."""
+    """Save a new trip record. Adds trip_id (if not already set) and created_at, returns trip_id."""
     trip = dict(trip)
-    trip["trip_id"] = uuid.uuid4().hex[:8]
+    trip.setdefault("trip_id", uuid.uuid4().hex[:8])
     trip["created_at"] = datetime.now().isoformat()
     trip.setdefault("search_results", [])
 

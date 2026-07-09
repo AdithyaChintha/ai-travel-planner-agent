@@ -16,7 +16,8 @@ from backend.vector_store import SessionMemory
 
 
 class TripState(TypedDict):
-    # --- Set once, from the user's /plan request ---
+    # --- Set once, before the graph runs ---
+    trip_id: str       # generated upfront so research can tag FAISS chunks
     origin: str        # where the trip starts from, e.g. "Bangalore, India"
     destination: str
     start_date: str   # "YYYY-MM-DD"

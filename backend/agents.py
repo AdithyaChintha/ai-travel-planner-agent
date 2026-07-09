@@ -67,7 +67,8 @@ def research(state: TripState) -> TripState:
             state["search_results"].append(result)
             memory.remember(
                 result["content"],
-                metadata={"title": result["title"], "url": result["url"]},
+                metadata={"title": result["title"], "url": result["url"],
+                          "trip_id": state["trip_id"]},
             )
 
     return state

@@ -30,6 +30,39 @@ st.set_page_config(page_title=settings.app_name, page_icon="\U0001f9f3")
 st.title(settings.app_name)
 
 # ---------------------------------------------------------------------------
+# Trip selector — load a previous trip from trips.json
+# ---------------------------------------------------------------------------
+
+try:
+    all_trips = requests.get(f"{API_URL}/trips").json()
+except Exception:
+    all_trips = []
+
+if all_trips:
+    trip_options = {
+        f"{t['destination']} ({t['start_date']} to {t['end_date']}) — #{t['trip_id']}": t
+        for t in all_trips
+    }
+    selected_label = st.selectbox("Continue a previous trip", ["— Plan a new trip —"] + list(trip_options.keys()))
+
+    if selected_label != "— Plan a new trip —":
+        selected_trip = trip_options[selected_label]
+        if st.session_state.get("trip_id") != selected_trip["trip_id"]:
+            st.session_state.trip_id = selected_trip["trip_id"]
+            st.session_state.itinerary = selected_trip["itinerary"]
+            st.session_state.estimated_cost = selected_trip["estimated_cost"]
+            st.session_state.over_budget = False
+            st.session_state.budget_notes = ""
+            st.session_state.retry_count = 0
+            st.session_state.token_usage = {}
+            st.session_state.chat_history = []
+        st.session_state.trip_explicitly_selected = True
+    else:
+        st.session_state.trip_explicitly_selected = False
+
+st.divider()
+
+# ---------------------------------------------------------------------------
 # Plan a trip
 # ---------------------------------------------------------------------------
 
@@ -79,6 +112,7 @@ if submitted:
             st.session_state.retry_count = data["retry_count"]
             st.session_state.token_usage = data["token_usage"]
             st.session_state.chat_history = []
+            st.session_state.trip_explicitly_selected = True
 
 # ---------------------------------------------------------------------------
 # Show results + follow-up chat
@@ -102,25 +136,28 @@ if "trip_id" in st.session_state:
     st.divider()
     st.subheader("Ask a follow-up question")
 
-    for question, answer in st.session_state.chat_history:
-        st.markdown(f"**You:** {question}")
-        st.markdown(f"**Assistant:** {answer}")
+    if not st.session_state.get("trip_explicitly_selected"):
+        st.info("Select a trip from the dropdown above or plan a new trip to ask questions.")
+    else:
+        for question, answer in st.session_state.chat_history:
+            st.markdown(f"**You:** {question}")
+            st.markdown(f"**Assistant:** {answer}")
 
-    with st.form("ask_form", clear_on_submit=True):
-        question = st.text_input("Your question", placeholder="e.g. What should I pack?")
-        ask_submitted = st.form_submit_button("Ask")
+        with st.form("ask_form", clear_on_submit=True):
+            question = st.text_input("Your question", placeholder="e.g. What should I pack?")
+            ask_submitted = st.form_submit_button("Ask")
 
-    if ask_submitted and question:
-        with st.spinner("Thinking..."):
-            response = requests.post(
-                f"{API_URL}/ask",
-                json={"trip_id": st.session_state.trip_id, "question": question},
-            )
+        if ask_submitted and question:
+            with st.spinner("Thinking..."):
+                response = requests.post(
+                    f"{API_URL}/ask",
+                    json={"trip_id": st.session_state.trip_id, "question": question},
+                )
 
-        if response.status_code != 200:
-            st.error(f"Question failed: {response.text}")
-        else:
-            data = response.json()
-            st.session_state.chat_history.append((question, data["answer"]))
-            st.session_state.token_usage = data["token_usage"]
-            st.rerun()
+            if response.status_code != 200:
+                st.error(f"Question failed: {response.text}")
+            else:
+                data = response.json()
+                st.session_state.chat_history.append((question, data["answer"]))
+                st.session_state.token_usage = data["token_usage"]
+                st.rerun()

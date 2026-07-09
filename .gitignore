@@ -13,5 +13,8 @@ data/
 # Logs
 *.log
 
+# Playwright MCP test artifacts
+.playwright-mcp/
+
 # Personal resume (contains PII, not part of this project's code)
 cv.md
